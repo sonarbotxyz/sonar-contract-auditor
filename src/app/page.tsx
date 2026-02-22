@@ -144,9 +144,9 @@ export default function Home() {
 
         {/* Stat bar */}
         <div className="mt-6 flex items-center gap-6 text-sm text-gray-500">
-          <span>10,000+ contracts audited</span>
+          <span>Powered by Gemini 3.1 Pro</span>
           <span className="text-gray-700">·</span>
-          <span>0 false starts</span>
+          <span>Built on Base</span>
         </div>
 
         {/* Textarea */}
