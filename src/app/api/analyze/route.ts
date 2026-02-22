@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getSupabase } from "@/lib/supabase";
 import { AUDIT_SYSTEM_PROMPT } from "@/lib/constants";
 import { nanoid } from "nanoid";
@@ -19,15 +19,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return Response.json(
-        { error: "Anthropic API key not configured." },
+        { error: "Gemini API key not configured." },
         { status: 500 }
       );
     }
 
-    const client = new Anthropic({ apiKey });
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-3.1-pro-preview" });
     const auditId = nanoid(12);
 
     const encoder = new TextEncoder();
@@ -40,32 +41,17 @@ export async function POST(req: NextRequest) {
         };
 
         try {
-          const response = await client.messages.create({
-            model: "claude-3-5-sonnet-latest",
-            max_tokens: 4096,
-            messages: [
-              {
-                role: "user",
-                content: `Analyze this Solidity smart contract:\n\n\`\`\`solidity\n${code.slice(0, 30000)}\n\`\`\``,
-              },
-            ],
-            system: AUDIT_SYSTEM_PROMPT,
-          });
+          const prompt = `${AUDIT_SYSTEM_PROMPT}\n\nAnalyze this Solidity smart contract:\n\n\`\`\`solidity\n${code.slice(0, 30000)}\n\`\`\``;
 
-          // Extract text content from response
-          const text = response.content
-            .filter((block): block is Anthropic.TextBlock => block.type === "text")
-            .map((block) => block.text)
-            .join("");
+          const result = await model.generateContent(prompt);
+          const text = result.response.text();
 
           // Parse JSON from the response — handle markdown code blocks too
           let parsed: { findings: Finding[]; score: number; summary: string };
           try {
-            // Try stripping markdown code fences if present
             const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
             parsed = JSON.parse(cleaned);
           } catch {
-            // Try to extract JSON from anywhere in the text
             const jsonMatch = text.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
               send("error", "Failed to parse audit results. Please try again.");
@@ -101,7 +87,6 @@ export async function POST(req: NextRequest) {
           // Stream each finding individually for a nice incremental UI
           for (const finding of findings) {
             send("finding", finding);
-            // Small delay for streaming effect
             await new Promise((resolve) => setTimeout(resolve, 150));
           }
 
@@ -121,7 +106,6 @@ export async function POST(req: NextRequest) {
             });
             send("id", auditId);
           } catch {
-            // Still send ID even if storage fails — audit result is valid
             send("id", auditId);
           }
 
