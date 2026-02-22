@@ -1,5 +1,6 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { withX402 } from "x402-next";
 import { getSupabase } from "@/lib/supabase";
 import { AUDIT_SYSTEM_PROMPT } from "@/lib/constants";
 import { nanoid } from "nanoid";
@@ -8,12 +9,14 @@ import type { Finding } from "@/types/audit";
 export const maxDuration = 60;
 export const runtime = "nodejs";
 
-export async function POST(req: NextRequest) {
+const payTo = (process.env.X402_PAYTO_ADDRESS || "0x0000000000000000000000000000000000000000") as `0x${string}`;
+
+async function handler(req: NextRequest) {
   try {
     const { code, contractAddress, source } = await req.json();
 
     if (!code || typeof code !== "string" || code.trim().length < 10) {
-      return Response.json(
+      return NextResponse.json(
         { error: "Please provide valid Solidity code." },
         { status: 400 }
       );
@@ -21,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return Response.json(
+      return NextResponse.json(
         { error: "Gemini API key not configured." },
         { status: 500 }
       );
@@ -46,7 +49,6 @@ export async function POST(req: NextRequest) {
           const result = await model.generateContent(prompt);
           const text = result.response.text();
 
-          // Parse JSON from the response — handle markdown code blocks too
           let parsed: { findings: Finding[]; score: number; summary: string };
           try {
             const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
@@ -62,7 +64,6 @@ export async function POST(req: NextRequest) {
             parsed = JSON.parse(jsonMatch[0]);
           }
 
-          // Validate and normalize
           const findings: Finding[] = (parsed.findings || []).map(
             (f: Finding) => ({
               severity: ["Critical", "High", "Medium", "Low", "Info"].includes(
@@ -84,7 +85,6 @@ export async function POST(req: NextRequest) {
 
           const summary = String(parsed.summary || "");
 
-          // Stream each finding individually for a nice incremental UI
           for (const finding of findings) {
             send("finding", finding);
             await new Promise((resolve) => setTimeout(resolve, 150));
@@ -93,7 +93,6 @@ export async function POST(req: NextRequest) {
           send("score", score);
           send("summary", summary);
 
-          // Store in Supabase
           try {
             await getSupabase().from("audits").insert({
               id: auditId,
@@ -121,7 +120,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return new Response(stream, {
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -129,6 +128,17 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch {
-    return Response.json({ error: "Invalid request." }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 }
+
+export const POST = withX402(
+  handler,
+  payTo,
+  {
+    price: "$0.50",
+    network: "base",
+    config: { description: "AI Contract Audit" },
+  },
+  { url: "https://x402.org/facilitator" }
+);
